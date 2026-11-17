@@ -6,6 +6,7 @@ let voiceEnabled = false, recognizing = false, speaking = false, processing = fa
 let recognizer = null, history = [], voiceChoices = [];
 let restartTimer = null, commandTimer = null, restartCount = 0, recognitionGeneration = 0;
 let lastWake = 0, voiceFatal = false;
+let utteranceGeneration = 0;
 const el = id => document.getElementById(id);
 const api = async (url, options = {}) => {
   const method = options.method || 'GET';
@@ -18,17 +19,37 @@ const err = (e) => alert(e.message||String(e));
 function showApp(){ el('loginScreen').hidden=true;el('appScreen').hidden=false; status(); refreshVoiceList(); drawTasks(); }
 el('loginForm').addEventListener('submit', async event=>{event.preventDefault(); try {let result=await api('/api/login',{method:'POST',body:JSON.stringify({password:el('password').value})});csrf=result.csrf;loggedIn=true;el('password').value='';showApp();}catch(e){el('loginError').textContent=e.message;}});
 el('logoutBtn').onclick = async()=>{stopVoice();try{await api('/api/logout',{method:'POST'});location.reload();}catch(e){err(e);}};
-document.querySelectorAll('.nav').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b===btn));document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.id===btn.dataset.tab));if(btn.dataset.tab==='mail') loadMail();});
+document.querySelectorAll('.nav').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('.nav').forEach(b=>{ b.classList.toggle('active',b===btn); if(b===btn)b.setAttribute('aria-current','page'); else b.removeAttribute('aria-current'); });document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.id===btn.dataset.tab));if(btn.dataset.tab==='mail') loadMail();});
 const addBubble=(text,kind)=>{let d=document.createElement('div');d.className='bubble '+kind;d.textContent=text;el('messages').appendChild(d);el('messages').scrollTop=el('messages').scrollHeight;return d;};
 async function status(){try{let s=await api('/api/status');el('systemStatus').textContent=s.ai_configured?'AI ONLINE':'AI NOT CONFIGURED';el('aiMode').textContent=s.ai_configured?'CLOUD AI · '+s.model:'SETUP REQUIRED';el('settingsAI').textContent=s.ai_configured?`Connected to cloud AI (${s.model}). Ollama is not required.`:'Set GEMINI_API_KEY in hosting settings.';el('gmailState').textContent=s.gmail_connected?'Google account connected (read-only).':s.gmail_configured?'Not connected. Click CONNECT GOOGLE GMAIL.':'Set Google OAuth credentials and COLLEGE_GMAIL_EMAIL in hosting settings first.';}catch(e){el('systemStatus').textContent='SESSION EXPIRED';}}
-async function sendMessage(text){ if(processing)return;let message=text.trim();if(!message)return;processing=true; addBubble(message,'user');let thinking=addBubble('Processing your request…','bot');el('promptInput').value='';try{let result=await api('/api/chat',{method:'POST',body:JSON.stringify({message,history})});thinking.textContent=result.reply;history.push({role:'user',text:message},{role:'model',text:result.reply});history=history.slice(-8);speak(result.reply);}catch(e){thinking.textContent=e.message;}finally{processing=false;if(!speaking)scheduleListening(300);}}
+async function sendMessage(text){ if(processing)return;let message=text.trim();if(!message)return;const campusAnswer=window.JarvisCampus?.answer(message);if(campusAnswer!==null&&campusAnswer!==undefined){addBubble(message,'user');addBubble(campusAnswer,'bot');el('promptInput').value='';speak(campusAnswer);return;}const portalAnswer=window.JarvisSRM?.answer(message);if(portalAnswer!==null&&portalAnswer!==undefined){addBubble(message,'user');addBubble(portalAnswer,'bot');el('promptInput').value='';speak(portalAnswer);return;}processing=true; addBubble(message,'user');let thinking=addBubble('Processing your request…','bot');el('promptInput').value='';try{let result=await api('/api/chat',{method:'POST',body:JSON.stringify({message,history})});thinking.textContent=result.reply;history.push({role:'user',text:message},{role:'model',text:result.reply});history=history.slice(-8);speak(result.reply);}catch(e){thinking.textContent=e.message;}finally{processing=false;if(!speaking)scheduleListening(300);}}
 el('chatForm').onsubmit=e=>{e.preventDefault();sendMessage(el('promptInput').value);};
 function refreshVoiceList(){if(!('speechSynthesis' in window))return;voiceChoices=speechSynthesis.getVoices();let select=el('voiceSelect'),saved=localStorage.getItem('jarvis_voice')||'';select.replaceChildren();let list=[...voiceChoices].sort((a,b)=>(b.lang==='en-GB')-(a.lang==='en-GB'));list.forEach(v=>{let o=document.createElement('option');o.value=v.name;o.textContent=`${v.name} (${v.lang})`;select.appendChild(o);});let preferred=list.find(v=>v.name===saved)||list.find(v=>v.lang==='en-GB')||list.find(v=>v.lang.startsWith('en'));if(preferred)select.value=preferred.name;}
 if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=refreshVoiceList;refreshVoiceList();}
 el('voiceSelect').onchange=()=>localStorage.setItem('jarvis_voice',el('voiceSelect').value);
-function speak(text){if(speechMuted||!('speechSynthesis' in window))return;speaking=true;if(recognizer&&recognizing){try{recognizer.stop();}catch(_){}}speechSynthesis.cancel();let utterance=new SpeechSynthesisUtterance(text.slice(0,1100));utterance.lang='en-GB';utterance.rate=Number(el('rateSlider').value);utterance.pitch=.93;let v=voiceChoices.find(v=>v.name===el('voiceSelect').value);if(v)utterance.voice=v;utterance.onend=()=>{speaking=false;scheduleListening(250);};utterance.onerror=()=>{speaking=false;scheduleListening(450);};speechSynthesis.speak(utterance);}
+function speak(text) {
+  if (speechMuted || !('speechSynthesis' in window)) return;
+  const generation = ++utteranceGeneration;
+  speaking = true;
+  if (recognizing) recognizer.abort();
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text.slice(0, 1100));
+  utterance.lang = 'en-GB';
+  utterance.rate = Number(el('rateSlider').value);
+  utterance.pitch = .93;
+  const voice = voiceChoices.find(option => option.name === el('voiceSelect').value);
+  if (voice) utterance.voice = voice;
+  const resume = () => {
+    if (generation !== utteranceGeneration) return;
+    speaking = false;
+    scheduleListening(300);
+  };
+  utterance.onend = resume;
+  utterance.onerror = resume;
+  speechSynthesis.speak(utterance);
+}
 el('voiceTest').onclick=()=>speak('Good evening. Campus JARVIS online and ready to assist you.');
-el('muteBtn').onclick=()=>{speechMuted=!speechMuted;el('muteBtn').textContent=speechMuted?'🔇 SPEECH OFF':'🔊 SPEECH ON';if(speechMuted&&window.speechSynthesis){speechSynthesis.cancel();speaking=false;scheduleListening(200);}};
+el('muteBtn').onclick=()=>{speechMuted=!speechMuted;el('muteBtn').textContent=speechMuted?'🔇 SPEECH OFF':'🔊 SPEECH ON';if(speechMuted&&window.speechSynthesis){utteranceGeneration++;speechSynthesis.cancel();speaking=false;scheduleListening(200);}};
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 function setVoiceStatus(message, title) {
   el('voiceState').textContent = message;
@@ -43,6 +64,10 @@ function scheduleListening(delay = 450) {
   if (!voiceEnabled || voiceFatal || speaking || processing || recognizing || restartTimer) return;
   restartTimer = setTimeout(() => {
     restartTimer = null;
+    startListening();
+  }, delay);
+}
+function startListening() {
     if (!voiceEnabled || voiceFatal || speaking || processing || recognizing || !recognizer) return;
     try { recognizer.start(); }
     catch (e) {
@@ -52,9 +77,9 @@ function scheduleListening(delay = 450) {
         scheduleListening(Math.min(8000, 500 * Math.pow(2, restartCount)));
       } else scheduleListening(800);
     }
-  }, delay);
 }
 function stopVoice() {
+  el('voiceToggle').setAttribute('aria-pressed', 'false');
   voiceEnabled = false; awaitingCommand = false; voiceFatal = false;
   recognitionGeneration++;
   clearVoiceTimers();
@@ -84,7 +109,7 @@ function activateVoice() {
     return;
   }
   voiceEnabled = true; voiceFatal = false; awaitingCommand = false;
-  restartCount = 0;
+  restartCount = 0; lastWake = 0;
   const generation = ++recognitionGeneration;
   clearVoiceTimers();
   recognizer = new SpeechRecognition();
@@ -94,7 +119,7 @@ function activateVoice() {
   recognizer.lang = 'en-IN';
   recognizer.onstart = () => {
     if (generation !== recognitionGeneration) return;
-    recognizing = true; restartCount = 0;
+    recognizing = true;
     setVoiceStatus('LISTENING FOR JARVIS', awaitingCommand ? 'LISTENING TO YOUR COMMAND' : 'WAKE WORD STANDBY');
   };
   recognizer.onend = () => {
@@ -124,6 +149,7 @@ function activateVoice() {
       if (!event.results[i].isFinal) continue;
       const alternatives = Array.from(event.results[i]).map(a => (a.transcript || '').trim()).filter(Boolean);
       if (!alternatives.length) continue;
+      restartCount = 0;
       const matched = alternatives.map(getWakeCommand).find(x => x !== null);
       if (matched !== undefined) {
         if (Date.now() - lastWake < 900) continue;
@@ -133,24 +159,27 @@ function activateVoice() {
           if (commandTimer) clearTimeout(commandTimer);
           commandTimer = null;
           handleVoiceCommand(matched);
+          return;
         } else {
           awaitNextCommand();
           setVoiceStatus('WAKE WORD DETECTED', 'YES, I AM LISTENING');
-          speak('Yes, I am listening.');
+
         }
       } else if (awaitingCommand) {
         awaitingCommand = false;
         if (commandTimer) clearTimeout(commandTimer);
         commandTimer = null;
         handleVoiceCommand(alternatives[0]);
+        return;
       }
     }
   };
+  el('voiceToggle').setAttribute('aria-pressed', 'true');
   el('voiceToggle').textContent = '■ STOP LISTENING';
   setVoiceStatus('STARTING MICROPHONE…', 'WAKE WORD STANDBY');
-  scheduleListening(0);
+  startListening();
 }
-function handleVoiceCommand(command){let lc=command.toLowerCase();if(/\b(mail|email|inbox|notice|unread)\b/.test(lc)){document.querySelector('[data-tab="mail"]').click();let q=lc.includes('unread')?'is:unread':lc.includes('important')||lc.includes('notice')?'exam OR assignment OR deadline OR placement':'';el('mailQuery').value=q;loadMail(q,true);return;}sendMessage(command);}
+function handleVoiceCommand(command){let lc=command.toLowerCase();const ca=window.JarvisCampus?.answer(command);if(ca!==null&&ca!==undefined){addBubble(command,'user');addBubble(ca,'bot');speak(ca);return;}if(window.JarvisSRM?.isPortalQuery(lc)){const answer=window.JarvisSRM.answer(command);addBubble(command,'user');addBubble(answer,'bot');speak(answer);return;}if(/\b(mail|email|inbox|notice|unread)\b/.test(lc)){document.querySelector('[data-tab="mail"]').click();let q=lc.includes('unread')?'is:unread':lc.includes('important')||lc.includes('notice')?'exam OR assignment OR deadline OR placement':'';el('mailQuery').value=q;loadMail(q,true);return;}sendMessage(command);}
 el('voiceToggle').onclick=()=>voiceEnabled?stopVoice():activateVoice();
 el('connectMail').onclick=()=>{window.location.href='/auth/google';};
 el('refreshMail').onclick=()=>loadMail();

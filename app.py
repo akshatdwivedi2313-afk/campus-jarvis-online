@@ -58,7 +58,9 @@ def protected(func):
 
 
 def csrf_required():
-    if not hmac.compare_digest(str(request.headers.get('X-Jarvis-CSRF', '')), str(session.get('csrf', ''))):
+    expected = session.get('csrf')
+    supplied = request.headers.get('X-Jarvis-CSRF', '')
+    if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
         abort(403, description='Invalid security token')
 
 
@@ -87,8 +89,9 @@ def health():
 @app.post('/api/login')
 def login():
     csrf_required()
-    provided = str((request.get_json(silent=True) or {}).get('password', ''))
-    if len(provided) > 200 or not hmac.compare_digest(provided, PASSWORD):
+    payload = request.get_json(silent=True)
+    provided = payload.get('password') if isinstance(payload, dict) else None
+    if not isinstance(provided, str) or len(provided) > 200 or not hmac.compare_digest(provided.encode(), PASSWORD.encode()):
         time.sleep(0.3)
         return jsonify(error='Incorrect password.'), 401
     session.clear()

@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Campus JARVIS - SRM Importer",
+  "description": "On-demand export of visible SRM attendance and internal marks tables. No password collection or automatic login.",
+  "version": "1.0.0",
+  "permissions": ["activeTab", "scripting"],
+  "action": {"default_popup": "popup.html"}
+}
