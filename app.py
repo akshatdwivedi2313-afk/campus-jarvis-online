@@ -28,6 +28,7 @@ PASSWORD = os.environ.get('OWNER_PASSWORD', '')
 if len(PASSWORD) < 12:
     raise RuntimeError('Set OWNER_PASSWORD to a private password at least 12 characters long.')
 OWNER_EMAIL = os.environ.get('OWNER_EMAIL', '').lower().strip()
+COLLEGE_GMAIL_EMAIL = os.environ.get('COLLEGE_GMAIL_EMAIL', '').lower().strip()
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
@@ -108,7 +109,7 @@ def logout():
 @app.get('/api/status')
 @protected
 def status():
-    return jsonify(ai_configured=bool(GEMINI_API_KEY), gmail_configured=bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and fernet and OWNER_EMAIL and PUBLIC_BASE_URL), gmail_connected=bool(load_google_token()), model=GEMINI_MODEL)
+    return jsonify(ai_configured=bool(GEMINI_API_KEY), gmail_configured=bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and fernet and COLLEGE_GMAIL_EMAIL and PUBLIC_BASE_URL), gmail_connected=bool(load_google_token()), model=GEMINI_MODEL)
 
 
 @app.post('/api/chat')
@@ -144,7 +145,7 @@ def chat():
 
 
 def oauth_enabled():
-    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and PUBLIC_BASE_URL and OWNER_EMAIL and fernet)
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and PUBLIC_BASE_URL and COLLEGE_GMAIL_EMAIL and fernet)
 
 
 @app.get('/auth/google')
@@ -155,7 +156,7 @@ def google_start():
     state = secrets.token_urlsafe(36)
     session['google_state'] = state
     from urllib.parse import urlencode
-    params = {'client_id': GOOGLE_CLIENT_ID, 'redirect_uri': PUBLIC_BASE_URL + '/auth/google/callback', 'response_type': 'code', 'scope': SCOPES, 'state': state, 'access_type': 'offline', 'prompt': 'consent', 'login_hint': OWNER_EMAIL}
+    params = {'client_id': GOOGLE_CLIENT_ID, 'redirect_uri': PUBLIC_BASE_URL + '/auth/google/callback', 'response_type': 'code', 'scope': SCOPES, 'state': state, 'access_type': 'offline', 'prompt': 'consent', 'login_hint': COLLEGE_GMAIL_EMAIL}
     return redirect('https://accounts.google.com/o/oauth2/v2/auth?' + urlencode(params))
 
 
@@ -174,8 +175,8 @@ def google_callback():
         info = requests.get('https://openidconnect.googleapis.com/v1/userinfo', headers={'Authorization': 'Bearer ' + token['access_token']}, timeout=15)
         info.raise_for_status()
         identity = info.json()
-        if identity.get('email', '').lower() != OWNER_EMAIL or not identity.get('email_verified'):
-            return 'This Google account does not match OWNER_EMAIL. No access was saved.', 403
+        if identity.get('email', '').lower() != COLLEGE_GMAIL_EMAIL or not identity.get('email_verified'):
+            return 'This Google account does not match COLLEGE_GMAIL_EMAIL. No access was saved.', 403
         token['expires_at'] = int(time.time()) + int(token.get('expires_in', 3500))
         old = load_google_token()
         if not token.get('refresh_token') and old:
@@ -183,18 +184,18 @@ def google_callback():
         if not token.get('refresh_token'):
             return 'Google did not provide a refresh token. Please disconnect and retry.', 400
         with database() as conn:
-            conn.execute('INSERT OR REPLACE INTO credentials VALUES (?, ?, ?)', (OWNER_EMAIL, fernet.encrypt(json.dumps(token).encode()).decode(), int(time.time())))
+            conn.execute('INSERT OR REPLACE INTO credentials VALUES (?, ?, ?)', (COLLEGE_GMAIL_EMAIL, fernet.encrypt(json.dumps(token).encode()).decode(), int(time.time())))
         return redirect('/?gmail=connected')
     except (requests.RequestException, KeyError, ValueError):
         return 'Google authorization did not finish. Check the OAuth credentials and callback address.', 502
 
 
 def load_google_token():
-    if not fernet or not OWNER_EMAIL:
+    if not fernet or not COLLEGE_GMAIL_EMAIL:
         return None
     try:
         with database() as conn:
-            row = conn.execute('SELECT encrypted_token FROM credentials WHERE email=?', (OWNER_EMAIL,)).fetchone()
+            row = conn.execute('SELECT encrypted_token FROM credentials WHERE email=?', (COLLEGE_GMAIL_EMAIL,)).fetchone()
         return json.loads(fernet.decrypt(row[0].encode()).decode()) if row else None
     except Exception:
         return None
@@ -212,7 +213,7 @@ def gmail_access_token():
     token['access_token'] = fresh['access_token']
     token['expires_at'] = int(time.time()) + int(fresh.get('expires_in', 3500))
     with database() as conn:
-        conn.execute('UPDATE credentials SET encrypted_token=? WHERE email=?', (fernet.encrypt(json.dumps(token).encode()).decode(), OWNER_EMAIL))
+        conn.execute('UPDATE credentials SET encrypted_token=? WHERE email=?', (fernet.encrypt(json.dumps(token).encode()).decode(), COLLEGE_GMAIL_EMAIL))
     return token['access_token']
 
 
@@ -282,7 +283,7 @@ def mail_detail(message_id):
 def mail_disconnect():
     csrf_required()
     with database() as conn:
-        conn.execute('DELETE FROM credentials WHERE email=?', (OWNER_EMAIL,))
+        conn.execute('DELETE FROM credentials WHERE email=?', (COLLEGE_GMAIL_EMAIL,))
     return jsonify(ok=True)
 
 

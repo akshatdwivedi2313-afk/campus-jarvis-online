@@ -1,4 +1,4 @@
-# Campus JARVIS — Online Website v2.0
+# Campus JARVIS — Online Website v2.1
 
 This is a **new, cloud-hostable website edition**. It does not use your laptop's Ollama service, and it is **not** the original OpenJarvis framework. It includes a responsive JARVIS-style dashboard, AI conversation, browser speech/wake phrase, an on-device study planner, and a Google Workspace Gmail reader.
 
@@ -18,7 +18,8 @@ This is a **new, cloud-hostable website edition**. It does not use your laptop's
 2. Visit https://render.com and connect GitHub. Click **New > Blueprint**, choose that repository, and accept `render.yaml` (or use **New > Web Service** and enter build command `pip install -r requirements.txt` and start command `gunicorn --workers 1 --threads 4 --timeout 90 app:app`). A single worker is important for this starter setup.
 3. In Render > **Environment**, set the values below. Blueprint may prompt for the fields marked `sync: false`. Choose a unique private password.
    - `OWNER_PASSWORD`: choose a unique strong password (12+ characters); never send it to anyone.
-   - `OWNER_EMAIL`: your exact college Gmail/Google Workspace address.
+   - `OWNER_EMAIL`: your personal JARVIS site owner email.
+   - `COLLEGE_GMAIL_EMAIL`: your exact college Gmail/Google Workspace address (separate from OWNER_EMAIL).
    - `GEMINI_API_KEY`: obtain from https://aistudio.google.com/apikey (subject to Google availability, quotas and terms).
    - `GEMINI_MODEL`: default `gemini-3.5-flash-lite` (change to an available model if API says model not found).
    - `PUBLIC_BASE_URL`: your exact Render URL, for example `https://campus-jarvis-online-xxxx.onrender.com`. **No trailing slash.** This may not be known until the first deployment; set/update it afterward.
@@ -34,7 +35,7 @@ Google **Web application** OAuth credentials are required for the online website
 2. In **Google Auth Platform** configure branding/audience/data access. For personal use with a college Google Workspace account, the account may need to be added as a **test user** for an External app. Use `openid`, `email`, `profile`, and `https://www.googleapis.com/auth/gmail.readonly` scopes. Google's labels/steps can change.
 3. Create an OAuth Client ID of type **Web application**. Add exactly this **Authorized redirect URI**: `https://YOUR-RENDER-SERVICE.onrender.com/auth/google/callback` (replace with your real hostname). If using a custom domain, use its matching callback instead.
 4. In Render Environment, set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` from the Google Cloud project, and confirm `PUBLIC_BASE_URL` is the deployed HTTPS origin. Redeploy.
-5. Open JARVIS > **College Gmail > Connect Google Gmail**, sign in with your exact `OWNER_EMAIL`, and consent to read-only mail access. Gmail messages aren't available until consent is completed.
+5. Open JARVIS > **College Gmail > Connect Google Gmail**, sign in with your exact `COLLEGE_GMAIL_EMAIL`, and consent to read-only mail access. Gmail messages aren't available until consent is completed.
 
 **Important:** Gmail `gmail.readonly` is a **restricted Google API scope**, not a casual login integration. Google may require OAuth verification or a security assessment for production/public use, and a college Workspace administrator may block the app. Testing mode can also cause refresh-token expiry; you may have to reconnect periodically. Do not bypass college policy. If blocked, ask your college IT administrator for approval.
 
@@ -73,3 +74,7 @@ Copy `.env.example` to `.env`, fill private settings, and run `START_LOCAL_DEMO.
 ## Safest first test
 
 **First deploy without Gmail credentials, log in, and test the AI chat.** Then connect Gmail following Google's own approval flow. You don't need to give anyone your college password or your OAuth secrets.
+
+## Version 2.1 update
+
+See [SETUP_VOICE_AND_GMAIL.md](SETUP_VOICE_AND_GMAIL.md). The college mailbox is now restricted to the separate `COLLEGE_GMAIL_EMAIL` variable; the wake phrase has better recognition recovery.

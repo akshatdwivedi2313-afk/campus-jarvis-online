@@ -14,6 +14,8 @@ services:
         sync: false
       - key: OWNER_EMAIL
         sync: false
+      - key: COLLEGE_GMAIL_EMAIL
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL

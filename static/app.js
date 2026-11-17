@@ -4,6 +4,8 @@ let csrf = document.body.dataset.csrf;
 let loggedIn = document.body.dataset.loggedIn === 'true';
 let voiceEnabled = false, recognizing = false, speaking = false, processing = false, speechMuted = false, awaitingCommand = false;
 let recognizer = null, history = [], voiceChoices = [];
+let restartTimer = null, commandTimer = null, restartCount = 0, recognitionGeneration = 0;
+let lastWake = 0, voiceFatal = false;
 const el = id => document.getElementById(id);
 const api = async (url, options = {}) => {
   const method = options.method || 'GET';
@@ -18,20 +20,136 @@ el('loginForm').addEventListener('submit', async event=>{event.preventDefault();
 el('logoutBtn').onclick = async()=>{stopVoice();try{await api('/api/logout',{method:'POST'});location.reload();}catch(e){err(e);}};
 document.querySelectorAll('.nav').forEach(btn=>btn.onclick=()=>{document.querySelectorAll('.nav').forEach(b=>b.classList.toggle('active',b===btn));document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.id===btn.dataset.tab));if(btn.dataset.tab==='mail') loadMail();});
 const addBubble=(text,kind)=>{let d=document.createElement('div');d.className='bubble '+kind;d.textContent=text;el('messages').appendChild(d);el('messages').scrollTop=el('messages').scrollHeight;return d;};
-async function status(){try{let s=await api('/api/status');el('systemStatus').textContent=s.ai_configured?'AI ONLINE':'AI NOT CONFIGURED';el('aiMode').textContent=s.ai_configured?'CLOUD AI · '+s.model:'SETUP REQUIRED';el('settingsAI').textContent=s.ai_configured?`Connected to cloud AI (${s.model}). Ollama is not required.`:'Set GEMINI_API_KEY in hosting settings.';el('gmailState').textContent=s.gmail_connected?'Google account connected (read-only).':s.gmail_configured?'Not connected. Click CONNECT GOOGLE GMAIL.':'Set Google OAuth credentials and OWNER_EMAIL in hosting settings first.';}catch(e){el('systemStatus').textContent='SESSION EXPIRED';}}
-async function sendMessage(text){ if(processing)return;let message=text.trim();if(!message)return;processing=true; addBubble(message,'user');let thinking=addBubble('Processing your request…','bot');el('promptInput').value='';try{let result=await api('/api/chat',{method:'POST',body:JSON.stringify({message,history})});thinking.textContent=result.reply;history.push({role:'user',text:message},{role:'model',text:result.reply});history=history.slice(-8);speak(result.reply);}catch(e){thinking.textContent=e.message;}finally{processing=false;}}
+async function status(){try{let s=await api('/api/status');el('systemStatus').textContent=s.ai_configured?'AI ONLINE':'AI NOT CONFIGURED';el('aiMode').textContent=s.ai_configured?'CLOUD AI · '+s.model:'SETUP REQUIRED';el('settingsAI').textContent=s.ai_configured?`Connected to cloud AI (${s.model}). Ollama is not required.`:'Set GEMINI_API_KEY in hosting settings.';el('gmailState').textContent=s.gmail_connected?'Google account connected (read-only).':s.gmail_configured?'Not connected. Click CONNECT GOOGLE GMAIL.':'Set Google OAuth credentials and COLLEGE_GMAIL_EMAIL in hosting settings first.';}catch(e){el('systemStatus').textContent='SESSION EXPIRED';}}
+async function sendMessage(text){ if(processing)return;let message=text.trim();if(!message)return;processing=true; addBubble(message,'user');let thinking=addBubble('Processing your request…','bot');el('promptInput').value='';try{let result=await api('/api/chat',{method:'POST',body:JSON.stringify({message,history})});thinking.textContent=result.reply;history.push({role:'user',text:message},{role:'model',text:result.reply});history=history.slice(-8);speak(result.reply);}catch(e){thinking.textContent=e.message;}finally{processing=false;if(!speaking)scheduleListening(300);}}
 el('chatForm').onsubmit=e=>{e.preventDefault();sendMessage(el('promptInput').value);};
 function refreshVoiceList(){if(!('speechSynthesis' in window))return;voiceChoices=speechSynthesis.getVoices();let select=el('voiceSelect'),saved=localStorage.getItem('jarvis_voice')||'';select.replaceChildren();let list=[...voiceChoices].sort((a,b)=>(b.lang==='en-GB')-(a.lang==='en-GB'));list.forEach(v=>{let o=document.createElement('option');o.value=v.name;o.textContent=`${v.name} (${v.lang})`;select.appendChild(o);});let preferred=list.find(v=>v.name===saved)||list.find(v=>v.lang==='en-GB')||list.find(v=>v.lang.startsWith('en'));if(preferred)select.value=preferred.name;}
 if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=refreshVoiceList;refreshVoiceList();}
 el('voiceSelect').onchange=()=>localStorage.setItem('jarvis_voice',el('voiceSelect').value);
-function speak(text){if(speechMuted||!('speechSynthesis' in window))return;speaking=true;if(recognizer&&recognizing){try{recognizer.stop();}catch(_){}}speechSynthesis.cancel();let utterance=new SpeechSynthesisUtterance(text.slice(0,1100));utterance.lang='en-GB';utterance.rate=Number(el('rateSlider').value);utterance.pitch=.93;let v=voiceChoices.find(v=>v.name===el('voiceSelect').value);if(v)utterance.voice=v;utterance.onend=()=>{speaking=false;restartListening();};utterance.onerror=()=>{speaking=false;restartListening();};speechSynthesis.speak(utterance);}
+function speak(text){if(speechMuted||!('speechSynthesis' in window))return;speaking=true;if(recognizer&&recognizing){try{recognizer.stop();}catch(_){}}speechSynthesis.cancel();let utterance=new SpeechSynthesisUtterance(text.slice(0,1100));utterance.lang='en-GB';utterance.rate=Number(el('rateSlider').value);utterance.pitch=.93;let v=voiceChoices.find(v=>v.name===el('voiceSelect').value);if(v)utterance.voice=v;utterance.onend=()=>{speaking=false;scheduleListening(250);};utterance.onerror=()=>{speaking=false;scheduleListening(450);};speechSynthesis.speak(utterance);}
 el('voiceTest').onclick=()=>speak('Good evening. Campus JARVIS online and ready to assist you.');
-el('muteBtn').onclick=()=>{speechMuted=!speechMuted;el('muteBtn').textContent=speechMuted?'🔇 SPEECH OFF':'🔊 SPEECH ON';if(speechMuted&&window.speechSynthesis)speechSynthesis.cancel();};
-const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
-function restartListening(){if(voiceEnabled&&!speaking&&!recognizing&&recognizer){try{recognizer.start();}catch(_){}}}
-function stopVoice(){voiceEnabled=false;awaitingCommand=false;if(recognizer)try{recognizer.stop();}catch(_){};el('voiceToggle').textContent='🎙 ENABLE HEY JARVIS';el('voiceState').textContent='VOICE MODE DISABLED';el('orbTitle').textContent='AWAITING ACTIVATION';}
-function activateVoice(){if(!SpeechRecognition){alert('Continuous browser speech recognition is not supported here. Try Chrome or Edge on Windows. On mobile, use typed chat if listening is unavailable.');return;}recognizer=new SpeechRecognition();recognizer.continuous=true;recognizer.interimResults=false;recognizer.lang='en-IN';recognizer.onstart=()=>{recognizing=true;el('voiceState').textContent='LISTENING FOR JARVIS';el('orbTitle').textContent='WAKE WORD STANDBY';};recognizer.onend=()=>{recognizing=false;if(voiceEnabled&&!speaking) setTimeout(restartListening,650);};recognizer.onerror=e=>{if(['not-allowed','service-not-allowed','audio-capture'].includes(e.error)){stopVoice();alert('Microphone access is blocked or unavailable. Allow microphone permission in browser settings.');}};
-recognizer.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){if(!e.results[i].isFinal)continue;const heard=e.results[i][0].transcript.trim();const match=heard.match(/\b(?:hey\s+)?jarvis\b[\s,.:!?-]*(.*)/i);if(match){let command=match[1].trim();if(command){awaitingCommand=false;handleVoiceCommand(command);}else{awaitingCommand=true;el('orbTitle').textContent='YES, I AM LISTENING';speak('Yes, I am listening.');}}else if(awaitingCommand){awaitingCommand=false;handleVoiceCommand(heard);} }};voiceEnabled=true;el('voiceToggle').textContent='■ STOP LISTENING';restartListening();}
+el('muteBtn').onclick=()=>{speechMuted=!speechMuted;el('muteBtn').textContent=speechMuted?'🔇 SPEECH OFF':'🔊 SPEECH ON';if(speechMuted&&window.speechSynthesis){speechSynthesis.cancel();speaking=false;scheduleListening(200);}};
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+function setVoiceStatus(message, title) {
+  el('voiceState').textContent = message;
+  if (title) el('orbTitle').textContent = title;
+}
+function clearVoiceTimers() {
+  if (restartTimer) clearTimeout(restartTimer);
+  if (commandTimer) clearTimeout(commandTimer);
+  restartTimer = null; commandTimer = null;
+}
+function scheduleListening(delay = 450) {
+  if (!voiceEnabled || voiceFatal || speaking || processing || recognizing || restartTimer) return;
+  restartTimer = setTimeout(() => {
+    restartTimer = null;
+    if (!voiceEnabled || voiceFatal || speaking || processing || recognizing || !recognizer) return;
+    try { recognizer.start(); }
+    catch (e) {
+      if (e.name !== 'InvalidStateError') {
+        restartCount = Math.min(restartCount + 1, 7);
+        setVoiceStatus('RECONNECTING MICROPHONE…');
+        scheduleListening(Math.min(8000, 500 * Math.pow(2, restartCount)));
+      } else scheduleListening(800);
+    }
+  }, delay);
+}
+function stopVoice() {
+  voiceEnabled = false; awaitingCommand = false; voiceFatal = false;
+  recognitionGeneration++;
+  clearVoiceTimers();
+  if (recognizer) { try { recognizer.abort(); } catch (_) {} }
+  recognizing = false;
+  el('voiceToggle').textContent = '🎙 ENABLE HEY JARVIS';
+  setVoiceStatus('VOICE MODE DISABLED', 'AWAITING ACTIVATION');
+}
+function awaitNextCommand() {
+  awaitingCommand = true;
+  if (commandTimer) clearTimeout(commandTimer);
+  commandTimer = setTimeout(() => {
+    awaitingCommand = false;
+    commandTimer = null;
+    if (voiceEnabled) setVoiceStatus('LISTENING FOR JARVIS', 'WAKE WORD STANDBY');
+  }, 14000);
+}
+function getWakeCommand(heard) {
+  // Require the wake phrase at the START: don't activate for general mentions of Jarvis.
+  // Narrow alternate spellings cover common transcription errors, not generic words.
+  const match = heard.match(/^\s*(?:(?:hey|hi|okay|ok)\s+)?(?:jarvis|jarviss|jarviz|jervis)\b[\s,.:!?-]*(.*)$/i);
+  return match ? match[1].trim() : null;
+}
+function activateVoice() {
+  if (!SpeechRecognition) {
+    alert('Your browser does not support speech recognition here. Try Microsoft Edge or Chrome on Windows.');
+    return;
+  }
+  voiceEnabled = true; voiceFatal = false; awaitingCommand = false;
+  restartCount = 0;
+  const generation = ++recognitionGeneration;
+  clearVoiceTimers();
+  recognizer = new SpeechRecognition();
+  recognizer.continuous = true;
+  recognizer.interimResults = false;
+  recognizer.maxAlternatives = 3;
+  recognizer.lang = 'en-IN';
+  recognizer.onstart = () => {
+    if (generation !== recognitionGeneration) return;
+    recognizing = true; restartCount = 0;
+    setVoiceStatus('LISTENING FOR JARVIS', awaitingCommand ? 'LISTENING TO YOUR COMMAND' : 'WAKE WORD STANDBY');
+  };
+  recognizer.onend = () => {
+    if (generation !== recognitionGeneration) return;
+    recognizing = false;
+    if (voiceEnabled && !speaking && !processing && !voiceFatal) {
+      setVoiceStatus('RECONNECTING MICROPHONE…');
+      scheduleListening(restartCount ? Math.min(8000, 500 * Math.pow(2, restartCount)) : 400);
+    }
+  };
+  recognizer.onerror = event => {
+    if (generation !== recognitionGeneration) return;
+    const error = event.error || 'unknown';
+    if (['not-allowed', 'service-not-allowed', 'audio-capture'].includes(error)) {
+      voiceFatal = true;
+      stopVoice();
+      alert('Microphone permission or audio input is unavailable. Check browser microphone permissions and Windows microphone settings.');
+    } else if (error === 'network') {
+      restartCount = Math.min(restartCount + 1, 7);
+      setVoiceStatus('SPEECH SERVICE OFFLINE — RETRYING');
+      // onend will run afterward; restarting is deliberately delayed.
+    }
+  };
+  recognizer.onresult = event => {
+    if (!voiceEnabled || speaking || processing || generation !== recognitionGeneration) return;
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (!event.results[i].isFinal) continue;
+      const alternatives = Array.from(event.results[i]).map(a => (a.transcript || '').trim()).filter(Boolean);
+      if (!alternatives.length) continue;
+      const matched = alternatives.map(getWakeCommand).find(x => x !== null);
+      if (matched !== undefined) {
+        if (Date.now() - lastWake < 900) continue;
+        lastWake = Date.now();
+        if (matched) {
+          awaitingCommand = false;
+          if (commandTimer) clearTimeout(commandTimer);
+          commandTimer = null;
+          handleVoiceCommand(matched);
+        } else {
+          awaitNextCommand();
+          setVoiceStatus('WAKE WORD DETECTED', 'YES, I AM LISTENING');
+          speak('Yes, I am listening.');
+        }
+      } else if (awaitingCommand) {
+        awaitingCommand = false;
+        if (commandTimer) clearTimeout(commandTimer);
+        commandTimer = null;
+        handleVoiceCommand(alternatives[0]);
+      }
+    }
+  };
+  el('voiceToggle').textContent = '■ STOP LISTENING';
+  setVoiceStatus('STARTING MICROPHONE…', 'WAKE WORD STANDBY');
+  scheduleListening(0);
+}
 function handleVoiceCommand(command){let lc=command.toLowerCase();if(/\b(mail|email|inbox|notice|unread)\b/.test(lc)){document.querySelector('[data-tab="mail"]').click();let q=lc.includes('unread')?'is:unread':lc.includes('important')||lc.includes('notice')?'exam OR assignment OR deadline OR placement':'';el('mailQuery').value=q;loadMail(q,true);return;}sendMessage(command);}
 el('voiceToggle').onclick=()=>voiceEnabled?stopVoice():activateVoice();
 el('connectMail').onclick=()=>{window.location.href='/auth/google';};
